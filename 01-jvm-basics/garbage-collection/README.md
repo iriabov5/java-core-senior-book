@@ -95,22 +95,26 @@ public class MemoryLeakExample {
 ```java
 public class MarkPhaseDemo {
     
+    // Static переменная - это корневая ссылка
+    private static Object staticRoot = new Object();
+    
     public static void demonstrateMarking() {
         // Корневые ссылки (Root References)
-        Object root1 = new Object(); // Static переменная
-        Object root2 = new Object(); // Локальная переменная в активном методе
+        Object localRoot = new Object(); // Локальная переменная в активном методе
         
         // Создаем граф объектов
         Object obj1 = new Object();
         Object obj2 = new Object();
         Object obj3 = new Object();
+        Object obj4 = new Object(); // Этот объект не связан с корнями
         
         // Связываем объекты
-        root1 = obj1;
-        obj1 = obj2;
-        obj2 = obj3;
+        localRoot = obj1;  // obj1 связан с корнем
+        obj1 = obj2;       // obj2 связан с obj1
+        obj2 = obj3;       // obj3 связан с obj2
         
-        // obj3 не связан с корневыми ссылками - будет помечен как garbage
+        // obj4 НЕ связан с корневыми ссылками - будет помечен как garbage
+        // obj1, obj2, obj3 связаны через цепочку: localRoot -> obj1 -> obj2 -> obj3
     }
 }
 ```
@@ -119,6 +123,13 @@ public class MarkPhaseDemo {
 1. **Начало с корневых ссылок** - static поля, локальные переменные активных методов
 2. **Рекурсивный обход** - все объекты, достижимые из корней, помечаются как "живые"
 3. **Использование битов** - каждый объект имеет mark bit для отслеживания состояния
+
+**Корневые ссылки (Root References):**
+- **Static поля** - переменные класса, объявленные как `static`
+- **Локальные переменные** - переменные в активных методах (в стеке)
+- **Параметры методов** - аргументы активных методов
+- **JNI глобальные ссылки** - ссылки из нативного кода
+- **Мониторы** - объекты, используемые в synchronized блоках
 
 #### 2. Sweep Phase (Фаза очистки)
 
@@ -141,6 +152,41 @@ public class SweepPhaseDemo {
     private static boolean isMarked(Object obj) {
         // Проверка mark bit
         return obj != null && obj.hashCode() % 2 == 0; // Упрощенная логика
+    }
+}
+```
+
+#### Подробный пример маркировки
+
+```java
+public class DetailedMarkingExample {
+    
+    // Static поле - корневая ссылка
+    private static Object staticObject = new Object();
+    
+    public static void demonstrateDetailedMarking() {
+        // Локальная переменная - корневая ссылка
+        Object localObject = new Object();
+        
+        // Создаем граф объектов
+        Object objA = new Object();
+        Object objB = new Object();
+        Object objC = new Object();
+        Object objD = new Object();
+        Object objE = new Object();
+        
+        // Связываем объекты
+        localObject = objA;        // objA связан с корнем
+        objA = objB;              // objB связан с objA
+        objB = objC;              // objC связан с objB
+        
+        staticObject = objD;       // objD связан с static корнем
+        
+        // objE НЕ связан ни с чем - будет garbage
+        
+        // Результат маркировки:
+        // ЖИВЫЕ объекты: staticObject, localObject, objA, objB, objC, objD
+        // МЕРТВЫЕ объекты: objE
     }
 }
 ```
