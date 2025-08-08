@@ -329,6 +329,106 @@ public class User {
 List<User> findByStatus(@Param("status") String status);
 ```
 
+### 4. Уровни кэширования Hibernate
+
+#### First Level Cache (Session Cache)
+```java
+// Автоматический кэш на уровне сессии
+@Transactional
+public void firstLevelCacheExample() {
+    // 1. Загружается из БД
+    User user1 = userRepository.findById(1L);
+    
+    // 2. Берется из кэша сессии (без запроса к БД)
+    User user2 = userRepository.findById(1L);
+    
+    // 3. user1 и user2 - это один и тот же объект
+    System.out.println(user1 == user2); // true
+}
+```
+
+#### Second Level Cache (Application Cache)
+```java
+// Настройка Second Level Cache
+@Entity
+@Cache(usage = CacheConcurrencyStrategy.READ_WRITE)
+public class User {
+    @Id
+    private Long id;
+    
+    @Cache(usage = CacheConcurrencyStrategy.READ_WRITE)
+    @OneToMany(mappedBy = "user")
+    private List<Order> orders;
+}
+
+// Конфигурация
+@Configuration
+public class CacheConfig {
+    
+    @Bean
+    public CacheManager cacheManager() {
+        return new EhCacheCacheManager(ehCacheManager());
+    }
+    
+    @Bean
+    public EhCacheManagerFactoryBean ehCacheManager() {
+        EhCacheManagerFactoryBean factory = new EhCacheManagerFactoryBean();
+        factory.setConfigLocation(new ClassPathResource("ehcache.xml"));
+        return factory;
+    }
+}
+```
+
+#### Query Cache
+```java
+// Кэширование результатов запросов
+@Repository
+public interface UserRepository extends JpaRepository<User, Long> {
+    
+    @QueryHints(@QueryHint(name = HINT_CACHEABLE, value = "true"))
+    @Query("SELECT u FROM User u WHERE u.status = :status")
+    List<User> findByStatus(@Param("status") String status);
+}
+
+// Включение Query Cache
+@Configuration
+public class HibernateConfig {
+    
+    @Bean
+    public HibernatePropertiesCustomizer hibernatePropertiesCustomizer() {
+        return hibernateProperties -> {
+            hibernateProperties.put("hibernate.cache.use_second_level_cache", "true");
+            hibernateProperties.put("hibernate.cache.use_query_cache", "true");
+            hibernateProperties.put("hibernate.cache.region.factory_class", 
+                "org.hibernate.cache.ehcache.EhCacheRegionFactory");
+        };
+    }
+}
+```
+
+#### Стратегии кэширования
+```java
+@Entity
+public class User {
+    
+    // READ_ONLY - только чтение, не изменяется
+    @Cache(usage = CacheConcurrencyStrategy.READ_ONLY)
+    private String name;
+    
+    // READ_WRITE - чтение и запись с блокировками
+    @Cache(usage = CacheConcurrencyStrategy.READ_WRITE)
+    private String email;
+    
+    // NONSTRICT_READ_WRITE - без блокировок, возможны грязные данные
+    @Cache(usage = CacheConcurrencyStrategy.NONSTRICT_READ_WRITE)
+    private String status;
+    
+    // TRANSACTIONAL - полная транзакционность
+    @Cache(usage = CacheConcurrencyStrategy.TRANSACTIONAL)
+    private BigDecimal balance;
+}
+```
+
 ### 4. Типичные проблемы и решения
 
 #### N+1 Query Problem
@@ -405,6 +505,9 @@ public void processUsers() {
 - [ ] Могу оптимизировать производительность через batch processing и кэширование
 - [ ] Умею диагностировать и решать LazyInitializationException
 - [ ] Знаю как использовать auditing для отслеживания изменений
+- [ ] Понимаю уровни кэширования Hibernate (First Level, Second Level, Query Cache)
+- [ ] Умею настраивать стратегии кэширования (READ_ONLY, READ_WRITE, etc.)
+- [ ] Могу диагностировать проблемы с кэшированием и их решения
 
 ## 🎯 Что спрашивают на интервью
 
@@ -427,7 +530,13 @@ public void processUsers() {
    - Исключение при обращении к lazy коллекциям вне транзакции, решения через @Transactional или JOIN FETCH
 
 7. **"Как оптимизировать производительность JPA приложений?"**
-   - Batch processing, правильные fetch strategies, кэширование, мониторинг SQL запросов
+    - Batch processing, правильные fetch strategies, кэширование, мониторинг SQL запросов
+
+8. **"Объясни уровни кэширования в Hibernate"**
+    - First Level Cache (Session), Second Level Cache (Application), Query Cache, стратегии кэширования
+
+9. **"Когда использовать разные стратегии кэширования?"**
+    - READ_ONLY для неизменяемых данных, READ_WRITE для изменяемых, NONSTRICT_READ_WRITE для редко изменяемых
 
 ## 📚 Дополнительно (если время есть)
 
