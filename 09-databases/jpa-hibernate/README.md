@@ -273,6 +273,316 @@ List<User> users = entityManager.createQuery(query).getResultList();
 └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
+## Внутренняя архитектура Hibernate
+
+### Основные компоненты Hibernate
+
+#### 1. **SessionFactory**
+```java
+// Центральный компонент Hibernate
+SessionFactory sessionFactory = new Configuration()
+    .configure("hibernate.cfg.xml")
+    .buildSessionFactory();
+
+// SessionFactory кэширует метаданные и настройки
+// Создается один раз на приложение
+```
+
+**Роль SessionFactory:**
+- Кэширует метаданные Entity
+- Управляет connection pool
+- Создает Session объекты
+- Хранит настройки конфигурации
+
+#### 2. **Session (EntityManager)**
+```java
+// Session - основной интерфейс для работы с БД
+Session session = sessionFactory.openSession();
+try {
+    // Операции с БД
+    User user = session.get(User.class, 1L);
+    session.save(newUser);
+    session.update(existingUser);
+    session.delete(userToDelete);
+} finally {
+    session.close();
+}
+```
+
+**Роль Session:**
+- Управляет жизненным циклом Entity
+- Кэширует объекты первого уровня
+- Отслеживает изменения (dirty checking)
+- Управляет транзакциями
+
+#### 3. **Transaction**
+```java
+Session session = sessionFactory.openSession();
+Transaction tx = session.beginTransaction();
+try {
+    // Операции в транзакции
+    session.save(user);
+    session.update(order);
+    tx.commit();
+} catch (Exception e) {
+    tx.rollback();
+    throw e;
+} finally {
+    session.close();
+}
+```
+
+### Уровни кэширования Hibernate
+
+#### 1. **Кэш первого уровня (L1 Cache)**
+
+**Что кэшируется:**
+- Объекты Entity в рамках одной Session
+- Автоматически очищается при закрытии Session
+
+```java
+Session session = sessionFactory.openSession();
+try {
+    // Первый запрос - идет в БД
+    User user1 = session.get(User.class, 1L);
+    
+    // Второй запрос - берется из кэша L1
+    User user2 = session.get(User.class, 1L);
+    
+    // user1 == user2 (тот же объект)
+    System.out.println(user1 == user2); // true
+} finally {
+    session.close();
+}
+```
+
+**Особенности L1 Cache:**
+- Привязан к Session
+- Автоматическое управление
+- Нельзя отключить
+- Очищается при session.clear() или session.evict()
+
+#### 2. **Кэш второго уровня (L2 Cache)**
+
+**Что кэшируется:**
+- Объекты Entity между разными Session
+- Результаты запросов
+- Коллекции
+
+```java
+@Entity
+@Cache(usage = CacheConcurrencyStrategy.READ_WRITE)
+public class User {
+    @Id
+    private Long id;
+    
+    @Cache(usage = CacheConcurrencyStrategy.READ_WRITE)
+    @OneToMany(mappedBy = "user")
+    private List<Order> orders;
+}
+```
+
+**Настройка L2 Cache:**
+```properties
+# application.properties
+spring.jpa.properties.hibernate.cache.use_second_level_cache=true
+spring.jpa.properties.hibernate.cache.region.factory_class=org.hibernate.cache.jcache.JCacheRegionFactory
+spring.jpa.properties.hibernate.cache.use_query_cache=true
+```
+
+**Типы стратегий кэширования:**
+```java
+// READ_ONLY - только чтение, не изменяется
+@Cache(usage = CacheConcurrencyStrategy.READ_ONLY)
+
+// READ_WRITE - чтение и запись с версионированием
+@Cache(usage = CacheConcurrencyStrategy.READ_WRITE)
+
+// NONSTRICT_READ_WRITE - без версионирования
+@Cache(usage = CacheConcurrencyStrategy.NONSTRICT_READ_WRITE)
+
+// TRANSACTIONAL - транзакционное кэширование
+@Cache(usage = CacheConcurrencyStrategy.TRANSACTIONAL)
+```
+
+#### 3. **Query Cache**
+
+**Что кэшируется:**
+- Результаты JPQL/HQL запросов
+- Параметры запросов
+
+```java
+// Включение Query Cache
+Query query = session.createQuery("FROM User u WHERE u.email = :email")
+    .setCacheable(true)
+    .setParameter("email", "user@example.com");
+
+List<User> users = query.list();
+```
+
+### Жизненный цикл Entity
+
+#### 1. **Состояния Entity**
+
+```java
+// Transient - новый объект, не связан с Session
+User user = new User();
+user.setName("John");
+user.setEmail("john@example.com");
+
+// Persistent - объект управляется Session
+Session session = sessionFactory.openSession();
+session.beginTransaction();
+session.save(user); // Теперь persistent
+session.getTransaction().commit();
+session.close();
+
+// Detached - объект был persistent, но Session закрыта
+// user теперь в состоянии detached
+
+// Removed - объект помечен на удаление
+session = sessionFactory.openSession();
+session.beginTransaction();
+User attachedUser = session.merge(user); // Снова persistent
+session.delete(attachedUser); // Теперь removed
+session.getTransaction().commit();
+session.close();
+```
+
+#### 2. **Dirty Checking**
+
+```java
+Session session = sessionFactory.openSession();
+session.beginTransaction();
+
+User user = session.get(User.class, 1L);
+user.setName("Updated Name"); // Автоматически отслеживается
+
+// Hibernate автоматически определяет изменения
+// и генерирует UPDATE запрос
+session.getTransaction().commit();
+session.close();
+```
+
+### Механизм работы Hibernate
+
+#### 1. **Генерация SQL**
+
+```java
+// Hibernate анализирует Entity и генерирует SQL
+@Entity
+@Table(name = "users")
+public class User {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    @Column(name = "name")
+    private String name;
+}
+
+// Генерируется SQL:
+// INSERT INTO users (name) VALUES (?)
+// SELECT * FROM users WHERE id = ?
+// UPDATE users SET name = ? WHERE id = ?
+// DELETE FROM users WHERE id = ?
+```
+
+#### 2. **Lazy Loading**
+
+```java
+@Entity
+public class User {
+    @OneToMany(mappedBy = "user", fetch = FetchType.LAZY)
+    private List<Order> orders;
+}
+
+// При загрузке User, orders не загружаются
+User user = session.get(User.class, 1L);
+// orders еще не загружены
+
+// При первом обращении к orders - загрузка из БД
+List<Order> orders = user.getOrders(); // SQL запрос
+```
+
+#### 3. **Proxy Objects**
+
+```java
+// Hibernate создает прокси для LAZY связей
+User user = session.get(User.class, 1L);
+// user.orders - это прокси объект
+
+// При обращении к прокси - загрузка реальных данных
+List<Order> orders = user.getOrders(); // Загрузка из БД
+```
+
+### Оптимизация производительности
+
+#### 1. **Batch Processing**
+
+```java
+// Настройка batch size
+properties.setProperty("hibernate.jdbc.batch_size", "50");
+
+// Batch insert
+Session session = sessionFactory.openSession();
+session.beginTransaction();
+
+for (int i = 0; i < 1000; i++) {
+    User user = new User("User" + i, "user" + i + "@example.com");
+    session.save(user);
+    
+    // Каждые 50 записей - batch commit
+    if (i % 50 == 0) {
+        session.flush();
+        session.clear();
+    }
+}
+
+session.getTransaction().commit();
+session.close();
+```
+
+#### 2. **StatelessSession**
+
+```java
+// Для массовых операций без кэширования
+StatelessSession statelessSession = sessionFactory.openStatelessSession();
+statelessSession.beginTransaction();
+
+for (int i = 0; i < 10000; i++) {
+    User user = new User("User" + i, "user" + i + "@example.com");
+    statelessSession.insert(user);
+}
+
+statelessSession.getTransaction().commit();
+statelessSession.close();
+```
+
+### Мониторинг и отладка
+
+#### 1. **SQL Logging**
+
+```properties
+# application.properties
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.format_sql=true
+spring.jpa.properties.hibernate.use_sql_comments=true
+```
+
+#### 2. **Statistics**
+
+```java
+Statistics stats = sessionFactory.getStatistics();
+stats.setStatisticsEnabled(true);
+
+// После выполнения операций
+System.out.println("Entity Loads: " + stats.getEntityLoadCount());
+System.out.println("Entity Updates: " + stats.getEntityUpdateCount());
+System.out.println("Query Executions: " + stats.getQueryExecutionCount());
+System.out.println("Second Level Cache Hits: " + stats.getSecondLevelCacheHitCount());
+```
+
 ### Ключевые преимущества
 
 1. **Автоматический ORM** - преобразование объектов в записи БД
